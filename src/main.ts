@@ -111,7 +111,6 @@ export default class ImageUploader extends Plugin {
         })
         file = compressedFile as File
       }
-      console.log(" clipboardData", clipboardData);
       this.uploadImage(file).then(async url => {
         const imgMarkdownText = `![](${url})`
         // this.replaceText(editor, pastePlaceText, imgMarkdownText)
@@ -291,9 +290,10 @@ export default class ImageUploader extends Plugin {
 
     this.addCommand({
       id: 'upload-all-page-local-images',
-      name: 'Upload All Local Images in This Page',
+      name: 'Upload All Local Images on This Page',
       callback: this.uploadActivatePageLocalImages.bind(this),
     });
+    
     this.addCommand({
       id: 'upload-all-local-images',
       name: 'Upload All Local Images in Obsidian',
