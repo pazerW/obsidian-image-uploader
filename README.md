@@ -1,6 +1,6 @@
 # Original Project
 
-![Link](https://github.com/Creling/obsidian-image-uploader)
+[Link](https://github.com/Creling/obsidian-image-uploader)
 
 The original project has not been updated for a long time. Some bugs appeared during use, so I fixed them and added some features of my own.
 
