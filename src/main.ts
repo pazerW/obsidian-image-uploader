@@ -5,6 +5,7 @@ import {
   MarkdownView,
   EditorPosition,
   normalizePath,
+  TFile,
 } from "obsidian";
 
 import axios from "axios";
@@ -16,7 +17,7 @@ import {
   PasteEventCopy,
 } from './custom-events';
 import { resolve } from "path";
-
+import { get } from "http";
 
 // Avoid the error: Property 'clipboardManager' does not exist on type 'MarkdownSubView'
 declare module 'obsidian' {
@@ -37,6 +38,7 @@ interface ImageUploaderSettings {
   imageUrlPath: string;
   maxWidth: number;
   enableResize: boolean;
+  maxConcurrentUploads: number;
 }
 
 const DEFAULT_SETTINGS: ImageUploaderSettings = {
@@ -46,6 +48,7 @@ const DEFAULT_SETTINGS: ImageUploaderSettings = {
   imageUrlPath: "",
   maxWidth: 4096,
   enableResize: false,
+  maxConcurrentUploads: 3,
 };
 
 interface pasteFunction {
@@ -56,17 +59,25 @@ export default class ImageUploader extends Plugin {
   settings: ImageUploaderSettings;
   pasteFunction: pasteFunction;
 
-  private replaceText(editor: Editor, target: string, replacement: string): void {
-    target = target.trim()
-    const lines = editor.getValue().split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const ch = lines[i].indexOf(target)
-      if (ch !== -1) {
-        const from = { line: i, ch: ch } as EditorPosition;
-        const to = { line: i, ch: ch + target.length } as EditorPosition;
-        editor.setCursor(from);
-        editor.replaceRange(replacement, from, to);
-        break;
+  private async replaceText(target: string, replacement: string, editor?: Editor, file?: TFile): Promise<void> {
+    target = target.trim();
+    if (editor) {
+      const lines = editor.getValue().split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const ch = lines[i].indexOf(target);
+        if (ch !== -1) {
+          const from = { line: i, ch: ch } as EditorPosition;
+          const to = { line: i, ch: ch + target.length } as EditorPosition;
+          editor.setCursor(from);
+          editor.replaceRange(replacement, from, to);
+          break;
+        }
+      }
+    } else if (file) {
+      let content = await this.app.vault.read(file);
+      if (content.includes(target)) {
+        content = content.replace(target, replacement);
+        await this.app.vault.modify(file, content);
       }
     }
   }
@@ -77,7 +88,7 @@ export default class ImageUploader extends Plugin {
       return;
     }
 
-    let clipboardData = ev.clipboardData?.files[0];
+    const clipboardData = ev.clipboardData?.files[0];
     const imageType = /image.*/;
     if (clipboardData && clipboardData.type.match(imageType)) {
       let file: File = clipboardData!;
@@ -100,14 +111,18 @@ export default class ImageUploader extends Plugin {
         })
         file = compressedFile as File
       }
-
-      this.uploadImage(file).then(url => {
+      console.log(" clipboardData", clipboardData);
+      this.uploadImage(file).then(async url => {
         const imgMarkdownText = `![](${url})`
-        this.replaceText(editor, pastePlaceText, imgMarkdownText)
-      }, err => {
+        // this.replaceText(editor, pastePlaceText, imgMarkdownText)
+        await this.replaceText(pastePlaceText, imgMarkdownText, editor);
+      
+      }, async err => {
         new Notice('[Image Uploader] Upload unsuccessfully, fall back to default paste!', 5000)
         console.log(err)
-        this.replaceText(editor, pastePlaceText, "");
+        // this.replaceText(editor, pastePlaceText, "");
+        await this.replaceText(pastePlaceText, file.name, editor);
+      
         mkView.currentMode.clipboardManager.handlePaste(
           new PasteEventCopy(ev)
         );
@@ -115,110 +130,155 @@ export default class ImageUploader extends Plugin {
     }
   }
 
-  async uploadImage(image: File): Promise<string> {
+  private uploadQueue: (() => Promise<void>)[] = [];
+  private activeUploads = 0;
 
+  // 控制上传队列并发
+  private enqueueUpload(task: () => Promise<void>) {
+    this.uploadQueue.push(task);
+    this.processQueue();
+  }
+
+  private processQueue() {
+    const count = this.settings.maxConcurrentUploads ? this.settings.maxConcurrentUploads : 3;
+    while (this.activeUploads < count && this.uploadQueue.length > 0) {
+      const task = this.uploadQueue.shift()!;
+      this.activeUploads++;
+      task().finally(() => {
+        this.activeUploads--;
+        this.processQueue();
+      });
+    }
+  }
+
+  async uploadImage(image: File): Promise<string> {
     return new Promise((resolve, reject) => {
-      const formData = new FormData()
-      const uploadBody = JSON.parse(this.settings.uploadBody)
+      const formData = new FormData();
+      const uploadBody = JSON.parse(this.settings.uploadBody);
 
       for (const key in uploadBody) {
-        if (uploadBody[key] == "$FILE") {
-          formData.append(key, image, image.name)
-        }
-        else {
-          formData.append(key, uploadBody[key])
+        if (uploadBody[key] === "$FILE") {
+          formData.append(key, image, image.name);
+        } else {
+          formData.append(key, uploadBody[key]);
         }
       }
 
       axios.post(this.settings.apiEndpoint, formData, {
-        "headers": JSON.parse(this.settings.uploadHeader)
+        headers: JSON.parse(this.settings.uploadHeader),
       }).then(res => {
-        const url = objectPath.get(res.data, this.settings.imageUrlPath)
-        resolve(url)
-      }, err => {
-        reject(err)
-      })
-    })
+        const url = objectPath.get(res.data, this.settings.imageUrlPath);
+        resolve(url);
+      }).catch(reject);
+    });
   }
 
   async uploadLocalImages(): Promise<void> {
-    // Get the current active MarkdownView
+    console.log("uploading local images");
+    // 获取全部的文件
+    const allFiles = this.app.vault.getFiles();
+    allFiles.forEach(file => {
+      // 判断文件是否是md 文件
+      if (file.extension !== "md") return;
+      const allFiles = this.app.vault.getFiles();
+
+      // 获取file 的内容
+      this.app.vault.read(file).then(async (data) => {
+        const lines = data.split("\n");
+        await this.getPageImages(lines, allFiles,undefined,file);
+      });
+    });
+
+
+  }
+
+  async uploadActivatePageLocalImages(): Promise<void> {
     const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!markdownView) return;
-    // Get Editor
+
     const editor = markdownView.editor;
-    // Get all the text
     const lines = editor.getValue().split("\n");
 
     const allFiles = this.app.vault.getFiles();
+    try {
+      await this.getPageImages(lines, allFiles, editor);
+    } catch (err) {
+      new Notice("[Image Uploader] Upload failed", 5000);
+      console.error(err);
+    }
+    new Notice("[Image Uploader] Upload completed", 4000);
+  }
 
-    let imageNameAndLinks: { [key: string]: string }[] = [];
-    let imageNames: string[] = [];
+ 
+  // 获取页面中的所有图片
+  // lines: string[]
+  async getPageImages(lines:string[],allFiles:TFile[],  editor?: Editor, mdfile?: TFile): Promise<void> {
 
-    for (let line of lines) {
-      // Match ![[...<Image Name>.<ext>]] or ![](...<Image Name>.<ext>)
+    const imageNameAndLinks: { [key: string]: string }[] = [];
+    const imageNames: string[] = [];
+
+    for (const line of lines) {
+      // 匹配本地图片链接或Markdown图片语法
+      // (!\[\[.+\]\]) 匹配如 ![[image.png]]
+      // (!\[.+\(.+\)) 匹配如 ![alt](image.png)
       const imageLinks = line.match(/(!\[\[.+\]\])|(!\[.+\(.+\))/gm);
+      // const imageLinks = line.match(/(!\[\[.+$$\])|(!$$.+$$$.+$)/gm);
       if (!imageLinks) continue;
 
       for (const imageLink of imageLinks) {
-
-        // Match ...<Image Name>.<ext>
-        let imageInfo = imageLink.match(/(?:\[\[|!\[]\()(?<uri>.*?)(?:\)|\]\])/);
+        const imageInfo = imageLink.match(/(?:\[\[|!\[]\()(?<uri>.*?)(?:\)|\]\])/);
         if (!imageInfo) continue;
 
-        let imageURI = imageInfo?.groups?.uri!;
+        const imageURI = imageInfo?.groups?.uri!;
+        if (imageURI.startsWith("http")) continue;
 
-        if (imageURI.startsWith("http")) continue
-
-        // Get <Image Name>.<ext>
         const imageName = decodeURIComponent(imageURI.split("/").pop()!);
         imageNameAndLinks.push({ [imageName]: imageLink });
         imageNames.push(imageName);
       }
+    }
 
-      const targetImages = allFiles.filter(file => {
-        return imageNames.includes(file.name);
-      });
+    const targetImages = allFiles.filter(file => imageNames.includes(file.name));
 
-      for (const targetImage of targetImages) {
-        const data = await this.app.vault.adapter.readBinary(normalizePath(targetImage.path));
-        const blob = new Blob([data]);
-        const file = new File([blob], targetImage.name, { type: 'image/png' });
+    let totalUploads = targetImages.length;
+    let completedUploads = 0;
 
-        this.uploadImage(file).then(url => {
-          const imgMarkdownText = `![](${url})`
-          const imageNameAndLink = imageNameAndLinks.find((item: { [key: string]: string }) => {
-            return Object.keys(item)[0] === targetImage.name;
-          });
-          if (imageNameAndLink) {
-            const imageLink = imageNameAndLink[targetImage.name];
-            this.replaceText(editor, imageLink, imgMarkdownText);
-          }
-        }, err => {
-          new Notice('[Image Uploader] Upload unsuccessfully', 5000)
-          console.log(err)
-        })
+    if (totalUploads === 0) {
+      if (editor) {
+        new Notice("[Image Uploader] No local images found to upload.", 4000);
       }
+      return;
+    }
 
+    for (const targetImage of targetImages) {
+      this.enqueueUpload(async () => {
+      const data = await this.app.vault.adapter.readBinary(normalizePath(targetImage.path));
+      const blob = new Blob([data]);
+      const file = new File([blob], targetImage.name, { type: "image/png" });
 
-      // const data = await this.app.vault.adapter.readBinary(imagePath);
-      // const blob = new Blob([data]);
-      // const file = new File([blob], imageName, { type: 'image/png' });
-
-      // this.uploadImage(file).then(url => {
-      //   const imgMarkdownText = `![](${url})`
-      //   this.replaceText(editor, imageLink, imgMarkdownText)
-      // }, err => {
-      //   new Notice('[Image Uploader] Upload unsuccessfully, fall back to default paste!', 5000)
-      //   console.log(err)
-
-      // })
-
+      try {
+        const url = await this.uploadImage(file);
+        const imgMarkdownText = `![](${url})`;
+        const imageNameAndLink = imageNameAndLinks.find(item => Object.keys(item)[0] === targetImage.name);
+        if (imageNameAndLink) {
+        const imageLink = imageNameAndLink[targetImage.name];
+          await this.replaceText(imageLink, imgMarkdownText, editor, mdfile);
+        }
+      } catch (err) {
+        new Notice("[Image Uploader] Upload failed", 5000);
+        console.error(err);
+      } finally {
+        completedUploads++;
+        if (completedUploads === totalUploads) {
+          const title = mdfile ? mdfile.name : "";
+          new Notice(`[Image Uploader] ${title ? `Images in "${title}" uploaded` : "Images in current file uploaded"}`, 4000);
+        }
+      }
+      });
     }
   }
 
   async onload(): Promise<void> {
-    console.log("loading Image Uploader");
     await this.loadSettings();
     // this.setupPasteHandler()
     this.addSettingTab(new ImageUploaderSettingTab(this.app, this));
@@ -230,8 +290,13 @@ export default class ImageUploader extends Plugin {
     );
 
     this.addCommand({
-      id: 'upload-all-local-images',
+      id: 'upload-all-page-local-images',
       name: 'Upload All Local Images in This Page',
+      callback: this.uploadActivatePageLocalImages.bind(this),
+    });
+    this.addCommand({
+      id: 'upload-all-local-images',
+      name: 'Upload All Local Images in Obsidian',
       callback: this.uploadLocalImages.bind(this),
     });
   }

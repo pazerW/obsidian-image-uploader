@@ -117,5 +117,22 @@ export default class ImageUploaderSettingTab extends PluginSettingTab {
                         })
                 });
         }
-    }
+
+        new Setting(containerEl)
+            .setName("Upload Concurrent")
+            .setDesc("The number of concurrent uploads.(Maximum 10)")
+            .addText((text) => {
+                text
+                    .setPlaceholder("3")
+                    .setValue(this.plugin.settings.maxConcurrentUploads?.toString() || "3")
+                    .onChange(async (value) => {
+                        let num = parseInt(value);
+                        if (isNaN(num) || num < 1) num = 3;
+                        this.plugin.settings.maxConcurrentUploads = num;
+                        await this.plugin.saveSettings();
+                        text.setValue(num.toString());
+                    })
+            });
+
+        }
 }
