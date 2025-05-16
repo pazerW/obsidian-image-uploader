@@ -1,3 +1,11 @@
+# Original Project
+
+![Link](https://github.com/Creling/obsidian-image-uploader)
+
+The original project has not been updated for a long time. Some bugs appeared during use, so I fixed them and added some features of my own.
+
+I have tried to retain the original author's information as much as possible.
+
 # Obsidian Image Uploader
 
 ![](https://i.loli.net/2021/07/16/fxWBeLAESNc6tK9.gif)
@@ -5,6 +13,12 @@
 This plugin could resize(optional) and upload the image in your clipboard to any image hosting automatically when pasting.
 
 ## Changelog
+
+- 0.4.0
+	- Fixed repeated uploads when upload fails.
+	- Changed upload method to queue-based; the queue size is now configurable.
+	- Added "upload all images in the vault" feature.
+
 - 0.3.2
 	- Add 'Upload All Local Images in This Page' command.
 - 0.3.1
