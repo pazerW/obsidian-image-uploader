@@ -14,6 +14,9 @@ This plugin could resize(optional) and upload the image in your clipboard to any
 
 ## Changelog
 
+- 0.4.1
+	- Added option to ignore uploading images inside Excalidraw files (uploading them may cause Excalidraw files to fail to open)
+
 - 0.4.0
 	- Fixed repeated uploads when upload fails.
 	- Changed upload method to queue-based; the queue size is now configurable.

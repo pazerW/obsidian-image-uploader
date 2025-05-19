@@ -178,7 +178,7 @@ export default class ImageUploader extends Plugin {
     const allFiles = this.app.vault.getFiles();
     allFiles.forEach(file => {
       // 判断文件是否是md 文件
-      if (file.extension !== "md") return;
+      if (file.extension !== "md" || file.name.includes(".excalidraw")) return;
       const allFiles = this.app.vault.getFiles();
 
       // 获取file 的内容

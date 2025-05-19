@@ -120,7 +120,7 @@ export default class ImageUploaderSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Upload Concurrent")
-            .setDesc("The number of concurrent uploads.(Maximum 10)")
+            .setDesc("The number of concurrent uploads.( Maximum 10 )")
             .addText((text) => {
                 text
                     .setPlaceholder("3")
@@ -133,6 +133,17 @@ export default class ImageUploaderSettingTab extends PluginSettingTab {
                         text.setValue(num.toString());
                     })
             });
+        
+        new Setting(containerEl)
+            .setName("Plugin Version")
+            .setDesc("The version of the plugin.")
+            .addText((text) => {
+                const manifest = (this.app as any).plugins.plugins[this.plugin.manifest.id]?.manifest;
+                const version = manifest?.version || "unknown";
+                text.setValue(`v${version}`).setDisabled(true);
+            }
+            );
 
-        }
+    }
+
 }
